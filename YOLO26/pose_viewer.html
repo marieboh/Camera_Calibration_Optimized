@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pose Viewer – Live 3D Skeleton</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d0d0d;
+    --surface:   #161616;
+    --border:    #2a2a2a;
+    --text:      #e8e6df;
+    --muted:     #666;
+    --accent:    #7c6af7;
+    --accent2:   #3cb8a0;
+    --skel:      #4a9eff;
+    --dot:       #ffffff;
+    --warn:      #f0c040;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    gap: 16px;
+  }
+
+  h1 {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 340px;
+    justify-content: space-between;
+  }
+
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+    flex-shrink: 0;
+    transition: background .3s;
+  }
+  #status-dot.live  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  #status-dot.error { background: #e55; }
+
+  #status-text { flex: 1; }
+  #fps-label   { color: var(--accent2); min-width: 60px; text-align: right; }
+
+  /* Canvas wrapper */
+  #canvas-wrap {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  canvas { display: block; }
+
+  /* Info overlay (bottom-left of canvas) */
+  #info {
+    position: absolute;
+    bottom: 12px; left: 14px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.7;
+    pointer-events: none;
+  }
+
+  /* Controls */
+  #controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  input[type=range] {
+    accent-color: var(--accent);
+    width: 110px;
+  }
+
+  input[type=checkbox] { accent-color: var(--accent); }
+
+</style>
+</head>
+<body>
+
+<h1>Pose Viewer &mdash; Live 3D Skeleton</h1>
+
+<div id="status-bar">
+  <div id="status-dot"></div>
+  <div id="status-text">Verbinde mit ws://localhost:8765 …</div>
+  <div id="fps-label">— fps</div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="c" width="620" height="580"></canvas>
+  <div id="info">
+    Maus ziehen = drehen &nbsp;|&nbsp; Scroll = Zoom<br>
+    Leertaste = Ansicht zurücksetzen
+  </div>
+</div>
+
+<div id="controls">
+  <label>
+    <input type="checkbox" id="chk-labels" checked>
+    Gelenk-Labels
+  </label>
+  <label>
+    <input type="checkbox" id="chk-axes">
+    Achsen
+  </label>
+  <label>
+    Zoom
+    <input type="range" id="rng-zoom" min="80" max="600" value="220">
+  </label>
+</div>
+
+<div id="dist-box">
+  Handabstand 3D: <span id="hand-dist">—</span>
+</div>
+
+<script>
+// ── COCO Keypoint-Namen ────────────────────────────────────────────────────────
+const KP_NAMES = [
+  "Nase","L-Auge","R-Auge","L-Ohr","R-Ohr",
+  "L-Schulter","R-Schulter","L-Ellbogen","R-Ellbogen",
+  "L-Hand","R-Hand","L-Hüfte","R-Hüfte",
+  "L-Knie","R-Knie","L-Knöchel","R-Knöchel"
+];
+
+// COCO Skeleton-Verbindungen
+const BONES = [
+  [0,1],[0,2],[1,3],[2,4],
+  [5,6],[5,7],[7,9],[6,8],[8,10],
+  [5,11],[6,12],[11,12],
+  [11,13],[13,15],[12,14],[14,16]
+];
+
+
+// ── Canvas + Kontext ───────────────────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx    = canvas.getContext("2d");
+const W = canvas.width, H = canvas.height;
+
+// ── Kamera-Zustand ─────────────────────────────────────────────────────────────
+let rotX = -0.18, rotY = 0.25;   // Radiant
+let zoom = 220;
+let drag = false, lastMX = 0, lastMY = 0;
+
+const zoomSlider = document.getElementById("rng-zoom");
+zoomSlider.addEventListener("input", () => { zoom = +zoomSlider.value; draw(); });
+
+canvas.addEventListener("mousedown", e => { drag = true; lastMX = e.clientX; lastMY = e.clientY; });
+window.addEventListener("mouseup",  () => { drag = false; });
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  rotY += (e.clientX - lastMX) * 0.007;
+  rotX += (e.clientY - lastMY) * 0.007;
+  lastMX = e.clientX; lastMY = e.clientY;
+  draw();
+});
+canvas.addEventListener("wheel", e => {
+  zoom = Math.max(60, Math.min(700, zoom - e.deltaY * 0.3));
+  zoomSlider.value = zoom;
+  draw();
+  e.preventDefault();
+}, { passive: false });
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") { rotX = -0.18; rotY = 0.25; zoom = 220; zoomSlider.value = 220; draw(); e.preventDefault(); }
+});
+
+// ── 3D → 2D Projektion (einfache orthografische + Rotation) ───────────────────
+function project(pt3d) {
+  let [x, y, z] = pt3d;
+
+  // Rotation um Y-Achse
+  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+  const x1 =  x * cosY + z * sinY;
+  const z1 = -x * sinY + z * cosY;
+  x = x1; z = z1;
+
+  // Rotation um X-Achse
+  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+  const y1 = y * cosX - z * sinX;
+  const z2 = y * sinX + z * cosX;
+  y = y1; // z2 unused (orthografisch)
+
+  return [
+    W / 2 + x * zoom,
+    H / 2 + y * zoom    
+  ];
+}
+
+// ── Keypoint-Daten ─────────────────────────────────────────────────────────────
+let keypoints = new Array(17).fill(null);
+
+// ── Zeichnen ───────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  const showLabels = document.getElementById("chk-labels").checked;
+  const showAxes   = document.getElementById("chk-axes").checked;
+
+  // Bodenraster
+  drawGrid();
+
+  // Optionale Achsen
+  if (showAxes) drawAxes();
+
+  // Knochen
+  for (const [i, j] of BONES) {
+    const a = keypoints[i], b = keypoints[j];
+    if (!a || !b) continue;
+    const pa = project(a), pb = project(b);
+
+    ctx.strokeStyle = "#4a9eff";
+    ctx.lineWidth   = 2.2;
+    ctx.lineCap     = "round";
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(pa[0], pa[1]);
+    ctx.lineTo(pb[0], pb[1]);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Keypoints
+  for (let idx = 0; idx < 17; idx++) {
+    const pt = keypoints[idx];
+    if (!pt) continue;
+    const [px, py] = project(pt);
+
+    let color = "#ffffff";
+  
+    ctx.beginPath();
+    ctx.arc(px, py, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (showLabels) {
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillText(KP_NAMES[idx], px + 7, py - 3);
+    }
+  }
+}
+
+function drawGrid() {
+  const steps = 5, step = 0.3;
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  for (let i = -steps; i <= steps; i++) {
+    const a = project([i * step, 0, -steps * step]);
+    const b = project([i * step, 0,  steps * step]);
+    const c = project([-steps * step, 0, i * step]);
+    const d = project([ steps * step, 0, i * step]);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(c[0], c[1]); ctx.lineTo(d[0], d[1]); ctx.stroke();
+  }
+}
+
+function drawAxes() {
+  const origin = project([0, 0, 0]);
+  const axes = [
+    { pt: [0.4, 0, 0], color: "#e55", label: "X" },
+    { pt: [0, 0.4, 0], color: "#5d5", label: "Y" },
+    { pt: [0, 0, 0.4], color: "#55e", label: "Z" },
+  ];
+  for (const ax of axes) {
+    const end = project(ax.pt);
+    ctx.strokeStyle = ax.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(origin[0], origin[1]);
+    ctx.lineTo(end[0], end[1]);
+    ctx.stroke();
+    ctx.fillStyle = ax.color;
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(ax.label, end[0] + 4, end[1] - 4);
+  }
+}
+
+// Checkbox-Listener
+document.getElementById("chk-labels").addEventListener("change", draw);
+document.getElementById("chk-axes").addEventListener("change",   draw);
+
+// ── WebSocket ──────────────────────────────────────────────────────────────────
+const statusDot  = document.getElementById("status-dot");
+const statusText = document.getElementById("status-text");
+const fpsLabel   = document.getElementById("fps-label");
+
+let reconnectDelay = 1000;
+
+function connect() {
+  const ws = new WebSocket("ws://localhost:8765");
+
+  ws.onopen = () => {
+    statusDot.className   = "live";
+    statusText.textContent = "Verbunden – empfange Pose-Daten";
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = evt => {
+    let data;
+    try { data = JSON.parse(evt.data); } catch { return; }
+
+    keypoints = data.keypoints.map(pt => pt ? pt : null);
+    fpsLabel.textContent = data.fps.toFixed(1) + " fps";
+    draw();
+  };
+
+  ws.onclose = () => {
+    statusDot.className   = "error";
+    statusText.textContent = `Verbindung unterbrochen – reconnect in ${reconnectDelay / 1000}s …`;
+    fpsLabel.textContent  = "— fps";
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+  };
+
+  ws.onerror = () => {
+    statusDot.className   = "error";
+    statusText.textContent = "Kann Server nicht erreichen (ws://localhost:8765)";
+  };
+}
+
+connect();
+draw(); // leere Szene beim Start
+</script>
+</body>
+</html>

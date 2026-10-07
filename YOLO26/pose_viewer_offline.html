@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pose Viewer – Live &amp; Offline 3D Skeleton</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d0d0d;
+    --surface:   #161616;
+    --surface2:  #1e1e1e;
+    --border:    #2a2a2a;
+    --border2:   #333;
+    --text:      #e8e6df;
+    --muted:     #666;
+    --accent:    #7c6af7;
+    --accent2:   #3cb8a0;
+    --skel:      #4a9eff;
+    --dot:       #ffffff;
+    --warn:      #f0c040;
+    --play:      #3cb8a0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    gap: 14px;
+  }
+
+  h1 {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  /* ── Mode tabs ─────────────────────────────────────────────────────── */
+  #mode-tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .tab-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+    letter-spacing: .04em;
+  }
+  .tab-btn.active {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border2);
+  }
+
+  /* ── Status bar (live mode) ────────────────────────────────────────── */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    width: 620px;
+    justify-content: space-between;
+  }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+    flex-shrink: 0;
+    transition: background .3s;
+  }
+  #status-dot.live  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  #status-dot.error { background: #e55; }
+  #status-text { flex: 1; }
+  #fps-label   { color: var(--accent2); min-width: 60px; text-align: right; }
+
+  /* ── Offline panel ─────────────────────────────────────────────────── */
+  #offline-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: 620px;
+  }
+
+  /* Drop zone */
+  #drop-zone {
+    width: 100%;
+    border: 2px dashed var(--border2);
+    border-radius: 10px;
+    padding: 22px 20px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    position: relative;
+  }
+  #drop-zone:hover, #drop-zone.over {
+    border-color: var(--accent);
+    background: rgba(124,106,247,.06);
+    color: var(--text);
+  }
+  #drop-zone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+  #drop-zone .dz-icon { font-size: 22px; margin-bottom: 6px; }
+  #drop-zone .dz-hint { font-size: 11px; margin-top: 4px; color: var(--muted); }
+  #file-info {
+    font-size: 12px;
+    color: var(--accent2);
+    min-height: 16px;
+  }
+
+  /* Playback controls */
+  #playback-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .pb-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    flex-shrink: 0;
+  }
+  .pb-btn:hover:not(:disabled) { background: #2a2a2a; border-color: var(--accent); }
+  .pb-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  #btn-play {
+    background: rgba(60,184,160,.12);
+    border-color: var(--play);
+    color: var(--play);
+    min-width: 72px;
+  }
+  #btn-play:hover:not(:disabled) {
+    background: rgba(60,184,160,.22);
+  }
+
+  /* Scrubber */
+  #scrubber {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 4px;
+    cursor: pointer;
+  }
+  #scrubber:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  #frame-counter {
+    color: var(--muted);
+    font-size: 11px;
+    min-width: 68px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  /* Speed selector */
+  #speed-wrap {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  #speed-select {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  /* ── Canvas wrapper ─────────────────────────────────────────────────── */
+  #canvas-wrap {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+
+  #info {
+    position: absolute;
+    bottom: 12px; left: 14px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.7;
+    pointer-events: none;
+  }
+
+  /* ── Bottom controls ────────────────────────────────────────────────── */
+  #controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  input[type=range]    { accent-color: var(--accent); width: 110px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+
+  /* ── Utility ────────────────────────────────────────────────────────── */
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<h1>Pose Viewer &mdash; Live &amp; Offline 3D Skeleton</h1>
+
+<!-- Mode tabs -->
+<div id="mode-tabs">
+  <button class="tab-btn active" id="tab-live"    onclick="switchMode('live')">⬤ Live (WebSocket)</button>
+  <button class="tab-btn"        id="tab-offline" onclick="switchMode('offline')">▶ Offline (JSON)</button>
+</div>
+
+<!-- Live status bar -->
+<div id="status-bar">
+  <div id="status-dot"></div>
+  <div id="status-text">Verbinde mit ws://localhost:8765 …</div>
+  <div id="fps-label">— fps</div>
+</div>
+
+<!-- Offline panel -->
+<div id="offline-panel" class="hidden">
+
+  <div id="drop-zone" id="drop-zone">
+    <input type="file" id="file-input" accept=".json">
+    <div class="dz-icon">📂</div>
+    <div>animation.json hier ablegen oder klicken</div>
+    <div class="dz-hint">Format: { fps, num_frames, frames: [ [[x,y,z], …], … ] } – beliebige Anzahl Joints</div>
+  </div>
+  <div id="file-info">Noch keine Datei geladen.</div>
+
+  <div id="playback-controls">
+    <button class="pb-btn" id="btn-rew"  onclick="rewind()"  disabled title="Zum Anfang">⏮</button>
+    <button class="pb-btn" id="btn-play" onclick="togglePlay()" disabled>▶ Play</button>
+    <button class="pb-btn" id="btn-step-back"  onclick="stepFrame(-1)" disabled title="−1 Frame">◂</button>
+    <button class="pb-btn" id="btn-step-fwd"   onclick="stepFrame(+1)" disabled title="+1 Frame">▸</button>
+    <input  type="range"   id="scrubber" min="0" value="0" disabled>
+    <span   id="frame-counter">0 / 0</span>
+    <div id="speed-wrap">
+      ×<select id="speed-select" onchange="onSpeedChange()">
+        <option value="0.25">0.25</option>
+        <option value="0.5">0.5</option>
+        <option value="1" selected>1</option>
+        <option value="1.5">1.5</option>
+        <option value="2">2</option>
+      </select>
+    </div>
+  </div>
+
+</div>
+
+<!-- Canvas -->
+<div id="canvas-wrap">
+  <canvas id="c" width="620" height="580"></canvas>
+  <div id="info">
+    Maus ziehen = drehen &nbsp;|&nbsp; Scroll = Zoom<br>
+    Leertaste = Play/Pause &nbsp;|&nbsp; ← → = Frame vor/zurück
+  </div>
+</div>
+
+<!-- Visual controls -->
+<div id="controls">
+  <label>
+    <input type="checkbox" id="chk-face" checked>
+    Gesichtspunkte
+  </label>
+  <label>
+    <input type="checkbox" id="chk-labels" checked>
+    Gelenk-Labels
+  </label>
+  <label>
+    <input type="checkbox" id="chk-axes">
+    Achsen
+  </label>
+  <label>
+    Zoom
+    <input type="range" id="rng-zoom" min="80" max="600" value="220">
+  </label>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Sapiens2 / Goliath 308-keypoint skeleton – used as fallback when the
+// loaded JSON does not contain a "bones" field.
+// Index mapping comes from dataset_info.keypoint_info in keypoints308.py.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BONES_308 = [
+  // ── lower body ──────────────────────────────────────────────────────────
+  [13,11],[11, 9],[14,12],[12,10],[9,10],   // ankles→knees→hips, hip bar
+  [ 5, 9],[ 6,10],[ 5, 6],                  // torso: shoulders→hips, shoulder bar
+  // ── upper body ──────────────────────────────────────────────────────────
+  [ 5, 7],[ 6, 8],                           // shoulders→elbows
+  [ 7,62],[ 8,41],                           // elbows→wrists (l:62  r:41)
+  // ── head ────────────────────────────────────────────────────────────────
+  [ 1, 2],[ 0, 1],[ 0, 2],                  // eyes bar, nose→eyes
+  [ 1, 3],[ 2, 4],[ 3, 5],[ 4, 6],          // eyes→ears, ears→shoulders
+  // ── feet ────────────────────────────────────────────────────────────────
+  [13,15],[13,16],[13,17],                   // left  ankle→big_toe/small_toe/heel
+  [14,18],[14,19],[14,20],                   // right ankle→big_toe/small_toe/heel
+  // ── left hand (wrist=62) ─────────────────────────────────────────────
+  [62,45],[45,44],[44,43],[43,42],           // left  thumb
+  [62,49],[49,48],[48,47],[47,46],           // left  forefinger
+  [62,53],[53,52],[52,51],[51,50],           // left  middle
+  [62,57],[57,56],[56,55],[55,54],           // left  ring
+  [62,61],[61,60],[60,59],[59,58],           // left  pinky
+  // ── right hand (wrist=41) ────────────────────────────────────────────
+  [41,24],[24,23],[23,22],[22,21],           // right thumb
+  [41,28],[28,27],[27,26],[26,25],           // right forefinger
+  [41,32],[32,31],[31,30],[30,29],           // right middle
+  [41,36],[36,35],[35,34],[34,33],           // right ring
+  [41,40],[40,39],[39,38],[38,37],           // right pinky
+];
+
+// In the 308-keypoint schema detailed face landmarks start at index 70
+// (center_of_glabella). Indices 0-4 (nose, eyes, ears) are body points
+// that stay visible regardless.
+const FACE_KP_START = 70;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Keypoint metadata – populated dynamically from loaded JSON
+// ═══════════════════════════════════════════════════════════════════════════
+
+let KP_NAMES = [];
+let BONES    = [];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Canvas
+// ═══════════════════════════════════════════════════════════════════════════
+
+const canvas = document.getElementById("c");
+const ctx    = canvas.getContext("2d");
+const W = canvas.width, H = canvas.height;
+
+// ─── Camera state ───────────────────────────────────────────────────────────
+let rotX = -0.25, rotY = 0.25;
+let zoom = 220;
+
+// ─── World alignment – updated when a file is loaded ─────────────────────────
+// yFloor : raw Y value of the lowest keypoint (= ground level)
+// yCenter: midpoint of the figure's Y extent (used to center the view)
+let yFloor  = 0;
+let yCenter = 0;
+
+function computeFloorAndCenter() {
+  yFloor = 0; yCenter = 0;
+  if (!animData || !animData.frames.length) return;
+  let minY = Infinity, maxY = -Infinity;
+  const frames = animData.frames;
+  const stride = Math.max(1, Math.floor(frames.length / 60));
+  for (let fi = 0; fi < frames.length; fi += stride) {
+    for (const pt of frames[fi]) {
+      if (!pt) continue;
+      if (pt[1] < minY) minY = pt[1];
+      if (pt[1] > maxY) maxY = pt[1];
+    }
+  }
+  if (!isFinite(minY)) return;
+  yFloor  = minY;
+  yCenter = (minY + maxY) / 2;
+}
+let drag = false, lastMX = 0, lastMY = 0;
+
+document.getElementById("rng-zoom").addEventListener("input", e => {
+  zoom = +e.target.value; draw();
+});
+
+canvas.addEventListener("mousedown", e => { drag = true; lastMX = e.clientX; lastMY = e.clientY; });
+window.addEventListener("mouseup",  () => { drag = false; });
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  rotY += (e.clientX - lastMX) * 0.007;
+  rotX += (e.clientY - lastMY) * 0.007;
+  lastMX = e.clientX; lastMY = e.clientY;
+  draw();
+});
+canvas.addEventListener("wheel", e => {
+  zoom = Math.max(60, Math.min(700, zoom - e.deltaY * 0.3));
+  document.getElementById("rng-zoom").value = zoom;
+  draw();
+  e.preventDefault();
+}, { passive: false });
+
+// ─── Keyboard ────────────────────────────────────────────────────────────────
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.code === "Space") {
+    if (currentMode === "offline" && animData) { togglePlay(); e.preventDefault(); }
+    else { rotX = -0.25; rotY = 0.25; zoom = 220; document.getElementById("rng-zoom").value = 220; draw(); e.preventDefault(); }
+  }
+  if (e.code === "ArrowRight") { stepFrame(+1); e.preventDefault(); }
+  if (e.code === "ArrowLeft")  { stepFrame(-1); e.preventDefault(); }
+});
+
+// ─── Projection ──────────────────────────────────────────────────────────────
+function project(pt3d) {
+  let [x, y, z] = pt3d;
+  // Shift so the vertical centre of the figure sits at the canvas centre
+  y -= yCenter;
+  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+  const x1 =  x * cosY + z * sinY;
+  const z1 = -x * sinY + z * cosY;
+  x = x1; z = z1;
+  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+  const y1 = y * cosX - z * sinX;
+  y = y1;
+  // negate y: in Blender/output space Y+ = up, but canvas Y+ = down
+  return [ W/2 + x * zoom, H/2 - y * zoom ];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared keypoint state  (size determined at load time)
+// ═══════════════════════════════════════════════════════════════════════════
+
+let keypoints = [];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Draw
+// ═══════════════════════════════════════════════════════════════════════════
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawGrid();
+  if (document.getElementById("chk-axes").checked) drawAxes();
+
+  const showFace = document.getElementById("chk-face").checked;
+
+  // Knochen
+  for (const [i, j] of BONES) {
+    if (!showFace && (i >= FACE_KP_START || j >= FACE_KP_START)) continue;
+    const a = keypoints[i], b = keypoints[j];
+    if (!a || !b) continue;
+    const pa = project(a), pb = project(b);
+    ctx.strokeStyle = "#4a9eff";
+    ctx.lineWidth   = 2.2;
+    ctx.lineCap     = "round";
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(pa[0], pa[1]);
+    ctx.lineTo(pb[0], pb[1]);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Joints
+  const showLabels = document.getElementById("chk-labels").checked;
+  for (let idx = 0; idx < keypoints.length; idx++) {
+    if (!showFace && idx >= FACE_KP_START) continue;
+    const pt = keypoints[idx];
+    if (!pt) continue;
+    const [px, py] = project(pt);
+    ctx.beginPath();
+    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (showLabels && KP_NAMES[idx]) {
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillText(KP_NAMES[idx], px + 7, py - 3);
+    }
+  }
+}
+
+function drawGrid() {
+  const steps = 6, step = 0.5;   // 6m × 6m floor
+  const f = yFloor;
+  ctx.strokeStyle = "rgba(255,255,255,0.07)";
+  ctx.lineWidth = 1;
+  for (let i = -steps; i <= steps; i++) {
+    const a = project([i*step, f, -steps*step]), b = project([i*step, f,  steps*step]);
+    const c = project([-steps*step, f, i*step]),  d = project([ steps*step, f, i*step]);
+    ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(c[0],c[1]); ctx.lineTo(d[0],d[1]); ctx.stroke();
+  }
+}
+
+function drawAxes() {
+  const f = yFloor;
+  const origin = project([0, f, 0]);
+  for (const ax of [
+    { pt:[0.4, f,   0], color:"#e55", label:"X" },
+    { pt:[0,   f+0.4, 0], color:"#5d5", label:"Y" },
+    { pt:[0,   f,   0.4], color:"#55e", label:"Z" },
+  ]) {
+    const end = project(ax.pt);
+    ctx.strokeStyle = ax.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(origin[0],origin[1]); ctx.lineTo(end[0],end[1]); ctx.stroke();
+    ctx.fillStyle = ax.color; ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(ax.label, end[0]+4, end[1]-4);
+  }
+}
+
+document.getElementById("chk-face").addEventListener("change",   draw);
+document.getElementById("chk-labels").addEventListener("change", draw);
+document.getElementById("chk-axes").addEventListener("change",   draw);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mode switching
+// ═══════════════════════════════════════════════════════════════════════════
+
+let currentMode = "live";
+let ws = null;
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById("tab-live").classList.toggle("active",    mode==="live");
+  document.getElementById("tab-offline").classList.toggle("active", mode==="offline");
+  document.getElementById("status-bar").classList.toggle("hidden",  mode!=="live");
+  document.getElementById("offline-panel").classList.toggle("hidden", mode!=="offline");
+
+  if (mode === "live") {
+    stopPlayback();
+    if (!ws || ws.readyState > 1) connectWS();
+  } else {
+    // Pause WS updates but keep connection alive
+    if (animData) {
+      loadFrameIntoKeypoints(currentFrame);
+      draw();
+    } else {
+      keypoints = [];
+      draw();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WebSocket (live mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const statusDot  = document.getElementById("status-dot");
+const statusText = document.getElementById("status-text");
+const fpsLabel   = document.getElementById("fps-label");
+let reconnectDelay = 1000;
+
+function connectWS() {
+  ws = new WebSocket("ws://localhost:8765");
+
+  ws.onopen = () => {
+    statusDot.className   = "live";
+    statusText.textContent = "Verbunden – empfange Pose-Daten";
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = evt => {
+    if (currentMode !== "live") return;
+    let data;
+    try { data = JSON.parse(evt.data); } catch { return; }
+    keypoints = data.keypoints.map(pt => pt ? pt : null);
+    // populate names from live message if not already set
+    if (!KP_NAMES.length && data.keypoint_names) KP_NAMES = data.keypoint_names;
+    if (!BONES.length && data.bones) BONES = data.bones;
+    fpsLabel.textContent = data.fps.toFixed(1) + " fps";
+    draw();
+  };
+
+  ws.onclose = () => {
+    statusDot.className   = "error";
+    statusText.textContent = `Verbindung unterbrochen – reconnect in ${reconnectDelay/1000}s …`;
+    fpsLabel.textContent  = "— fps";
+    setTimeout(() => { if (currentMode === "live") connectWS(); }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+  };
+
+  ws.onerror = () => {
+    statusDot.className   = "error";
+    statusText.textContent = "Kann Server nicht erreichen (ws://localhost:8765)";
+  };
+}
+
+connectWS();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Offline: File loading
+// ═══════════════════════════════════════════════════════════════════════════
+
+let animData     = null;   // parsed animation.json
+let currentFrame = 0;
+let isPlaying    = false;
+let rafId        = null;
+let lastTs       = null;
+let frameAccum   = 0;
+let playbackSpeed = 1.0;
+
+const dropZone   = document.getElementById("drop-zone");
+const fileInput  = document.getElementById("file-input");
+const fileInfo   = document.getElementById("file-info");
+const scrubber   = document.getElementById("scrubber");
+const frameCounter = document.getElementById("frame-counter");
+
+// Drag-and-drop
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("over"); });
+dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("over");
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+fileInput.addEventListener("change", e => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+
+function loadFile(file) {
+  if (!file.name.endsWith(".json")) {
+    fileInfo.textContent = "⚠ Nur .json-Dateien werden unterstützt.";
+    fileInfo.style.color = "#f0c040";
+    return;
+  }
+  fileInfo.textContent = "Lade …";
+  fileInfo.style.color = "var(--muted)";
+  const reader = new FileReader();
+  reader.onload = evt => {
+    try {
+      const parsed = JSON.parse(evt.target.result);
+      if (!parsed.frames || !Array.isArray(parsed.frames)) throw new Error("Kein 'frames'-Array.");
+      animData     = parsed;
+      currentFrame = 0;
+      frameAccum   = 0;
+      stopPlayback();
+
+      const n    = animData.num_frames    ?? animData.frames.length;
+      const kpts = animData.num_keypoints ?? animData.frames[0]?.length ?? "?";
+
+      // Load keypoint names and skeleton bones from file
+      KP_NAMES = animData.keypoint_names ??
+                 Array.from({length: typeof kpts === "number" ? kpts : 0},
+                            (_, i) => `kp_${i}`);
+      BONES = animData.bones ??
+              (kpts === 308 ? BONES_308 : []);
+
+      computeFloorAndCenter();
+
+      fileInfo.textContent =
+        `✅ ${file.name}  ·  ${n} Frames  ·  ${kpts} Joints  ·  ${animData.fps ?? "?"} FPS` +
+        (BONES.length ? `  ·  ${BONES.length} Bones` : "");
+      fileInfo.style.color = "var(--accent2)";
+
+      scrubber.max   = n - 1;
+      scrubber.value = 0;
+      updateFrameCounter();
+      setPlaybackEnabled(true);
+      loadFrameIntoKeypoints(0);
+      draw();
+    } catch (err) {
+      fileInfo.textContent = "❌ Fehler beim Parsen: " + err.message;
+      fileInfo.style.color = "#e55";
+    }
+  };
+  reader.readAsText(file);
+}
+
+function loadFrameIntoKeypoints(idx) {
+  if (!animData) return;
+  const frame = animData.frames[idx];
+  if (!frame) return;
+  keypoints = frame.map(pt => (pt ? pt : null));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Offline: Playback
+// ═══════════════════════════════════════════════════════════════════════════
+
+function setPlaybackEnabled(on) {
+  ["btn-play","btn-rew","btn-step-back","btn-step-fwd","scrubber"].forEach(id => {
+    document.getElementById(id).disabled = !on;
+  });
+}
+
+function togglePlay() {
+  if (!animData) return;
+  isPlaying ? pausePlayback() : startPlayback();
+}
+
+function startPlayback() {
+  if (!animData) return;
+  isPlaying = true;
+  document.getElementById("btn-play").textContent = "⏸ Pause";
+  lastTs = null;
+  frameAccum = 0;
+  rafId = requestAnimationFrame(tick);
+}
+
+function pausePlayback() {
+  isPlaying = false;
+  document.getElementById("btn-play").textContent = "▶ Play";
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+}
+
+function stopPlayback() {
+  pausePlayback();
+  document.getElementById("btn-play").textContent = "▶ Play";
+}
+
+function rewind() {
+  const wasPlaying = isPlaying;
+  stopPlayback();
+  currentFrame = 0;
+  frameAccum = 0;
+  scrubber.value = 0;
+  updateFrameCounter();
+  if (animData) { loadFrameIntoKeypoints(0); draw(); }
+  if (wasPlaying) startPlayback();
+}
+
+function stepFrame(delta) {
+  if (!animData) return;
+  stopPlayback();
+  const n = animData.frames.length;
+  currentFrame = Math.max(0, Math.min(n-1, currentFrame + delta));
+  scrubber.value = currentFrame;
+  updateFrameCounter();
+  loadFrameIntoKeypoints(currentFrame);
+  draw();
+}
+
+function onSpeedChange() {
+  playbackSpeed = parseFloat(document.getElementById("speed-select").value);
+}
+
+function updateFrameCounter() {
+  const n = animData ? animData.frames.length : 0;
+  frameCounter.textContent = `${currentFrame + 1} / ${n}`;
+}
+
+function tick(ts) {
+  if (!isPlaying) return;
+
+  if (lastTs !== null) {
+    const dt = ts - lastTs;
+    const fps = (animData.fps ?? 20) * playbackSpeed;
+    frameAccum += dt * fps / 1000;
+
+    const advance = Math.floor(frameAccum);
+    if (advance > 0) {
+      frameAccum -= advance;
+      currentFrame += advance;
+      if (currentFrame >= animData.frames.length) {
+        currentFrame = 0;  // loop
+      }
+      scrubber.value = currentFrame;
+      updateFrameCounter();
+      loadFrameIntoKeypoints(currentFrame);
+      draw();
+    }
+  }
+  lastTs = ts;
+  rafId = requestAnimationFrame(tick);
+}
+
+// Scrubber drag
+scrubber.addEventListener("input", e => {
+  const wasPlaying = isPlaying;
+  if (wasPlaying) pausePlayback();
+  currentFrame = parseInt(e.target.value, 10);
+  updateFrameCounter();
+  if (animData) { loadFrameIntoKeypoints(currentFrame); draw(); }
+  if (wasPlaying) startPlayback();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════════════
+
+draw();
+</script>
+</body>
+</html>

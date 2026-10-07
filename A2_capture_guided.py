@@ -85,17 +85,17 @@ class CoverageTracker:
     def fraction(self):
         return float(self.hit.sum() / (self.gx * self.gy))
 
-    def missing_hint(self):
-        """Richtungstext zur groessten zusammenhaengenden Luecke."""
-        empty = np.argwhere(~self.hit)   # (row,col)
-        if len(empty) == 0:
-            return "Vollstaendig - jetzt Kippwinkel variieren!"
-        cy = empty[:, 0].mean() / (self.gy - 1 + 1e-9)
-        cx = empty[:, 1].mean() / (self.gx - 1 + 1e-9)
-        vert = "oben" if cy < 0.4 else ("unten" if cy > 0.6 else "")
-        horiz = "links" if cx < 0.4 else ("rechts" if cx > 0.6 else "")
-        d = "-".join([p for p in (vert, horiz) if p]) or "Rand/Ecken"
-        return f"Board nach: {d}"
+   # def missing_hint(self):
+    #    """Richtungstext zur groessten zusammenhaengenden Luecke."""
+     #   empty = np.argwhere(~self.hit)   # (row,col)
+      #  if len(empty) == 0:
+       #     return "Vollstaendig - jetzt Kippwinkel variieren!"
+        #cy = empty[:, 0].mean() / (self.gy - 1 + 1e-9)
+        #cx = empty[:, 1].mean() / (self.gx - 1 + 1e-9)
+        #vert = "oben" if cy < 0.4 else ("unten" if cy > 0.6 else "")
+        #horiz = "links" if cx < 0.4 else ("rechts" if cx > 0.6 else "")
+        #d = "-".join([p for p in (vert, horiz) if p]) or "Rand/Ecken"
+        #return f"Board nach: {d}"
 
     def tilt_hint(self):
         if self.saved < 4:
@@ -204,16 +204,16 @@ def draw_overlay(preview, tracker, current, cam_label):
     cov = tracker.fraction()
     cov_col = GREEN if cov >= 0.55 else (YELLOW if cov >= 0.4 else RED)
     txt(f"{cam_label}  Coverage {cov:0.0%}  gespeichert: {tracker.saved}", 22, cov_col)
-    if current is not None:
-        t = current["tilt_deg"]
-        ts = f"{t:0.0f}deg" if t == t else "n/a"   # NaN check
-        txt(f"Detektion: {current['num']} Ecken  Kippung {ts}", 44)
-    else:
-        txt("Kein Board erkannt", 44, RED)
-    txt(tracker.missing_hint(), ph - 30, YELLOW)
-    th = tracker.tilt_hint()
-    if th:
-        txt(th, ph - 10, YELLOW)
+    #if current is not None:
+     #   t = current["tilt_deg"]
+      #  ts = f"{t:0.0f}deg" if t == t else "n/a"   # NaN check
+       # txt(f"Detektion: {current['num']} Ecken  Kippung {ts}", 44)
+    #else:
+     #   txt("Kein Board erkannt", 44, RED)
+    #txt(tracker.missing_hint(), ph - 30, YELLOW)
+    #th = tracker.tilt_hint()
+    #if th:
+    #    txt(th, ph - 10, YELLOW)
     return preview
 
 

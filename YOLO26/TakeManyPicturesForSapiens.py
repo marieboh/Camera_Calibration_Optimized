@@ -107,6 +107,17 @@ def capture_frame(cam):
     return img.get_image_data_numpy()
 
 
+def highest_burst_index(base):
+    """Hoechste vorhandene burst_XXX-Nummer in `base` (0 = noch keine).
+    Der naechste Burst ist dann diese Nummer + 1 – so wird nie ueberschrieben."""
+    highest = 0
+    if os.path.isdir(base):
+        for name in os.listdir(base):
+            if name.startswith("burst_") and name[len("burst_"):].isdigit():
+                highest = max(highest, int(name[len("burst_"):]))
+    return highest
+
+
 # =========================
 # BURST-AUFNAHME
 # =========================
@@ -199,7 +210,10 @@ def main():
     WIN = "Vorschau  |  SPACE = Burst  |  Q / ESC = Beenden"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
 
-    burst_count  = 0
+    # Start bei 4 -> erster SPACE-Druck erzeugt burst_005 (003/004 sind ausgelagert).
+    # max(...) sorgt dafuer, dass spaeter automatisch hinter dem hoechsten Ordner
+    # weitergezaehlt wird, statt zu ueberschreiben.
+    burst_count  = max(4, highest_burst_index(SAVE_BASE))
     status_text  = "Bereit — SPACE drücken um Burst zu starten"
     status_color = (0, 220, 0)   # Grün
 
